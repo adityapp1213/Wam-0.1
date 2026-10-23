@@ -2,6 +2,9 @@
 
 Panda action-conditioned dataset project for H-JEPA.
 
+<img width="2048" height="512" alt="image" src="https://github.com/user-attachments/assets/83ed301e-2b35-4d7e-8c8f-87e46dd0e8b1" />
+
+
 The project has two learning levels:
 
 - Level 0: input frame + one 7D Panda action -> observation frame
