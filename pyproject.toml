@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "wam-0.1"
+version = "0.1.0"
+description = "Panda action-conditioned dataset tools for H-JEPA"
+requires-python = ">=3.11"
+dependencies = [
+    "numpy",
+    "pillow",
+    "robosuite>=1.5.2",
+    "h5py",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+

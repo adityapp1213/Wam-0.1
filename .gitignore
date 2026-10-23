@@ -1,0 +1,12 @@
+__pycache__/
+*.py[cod]
+.venv/
+data/controller_test/*
+data/final/*
+data/manifests/*
+reports/*
+!data/controller_test/.gitkeep
+!data/final/.gitkeep
+!data/manifests/.gitkeep
+!reports/.gitkeep
+

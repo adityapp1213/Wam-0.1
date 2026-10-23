@@ -1,0 +1,64 @@
+{
+  "project_name": "wam-0.1",
+  "robot": "Panda",
+  "simulator": "robosuite",
+  "controller": {
+    "robosuite_controller": "OSC_POSE",
+    "action_dim": 7,
+    "action_layout": [
+      "dx",
+      "dy",
+      "dz",
+      "d_rx_axis_angle",
+      "d_ry_axis_angle",
+      "d_rz_axis_angle",
+      "gripper"
+    ],
+    "action_low": -1.0,
+    "action_high": 1.0
+  },
+  "capture": {
+    "image_width": 128,
+    "image_height": 128,
+    "cameras": ["agentview", "frontview", "birdview"],
+    "store_rgb": true,
+    "store_depth": true,
+    "store_robot_state": true,
+    "depth_format": "float32_npy"
+  },
+  "levels": {
+    "level_0": "input + action -> observation",
+    "level_1": "input + action chunk -> future subgoal",
+    "level_1_chunk_length": 8
+  },
+  "pilot": {
+    "tasks_source": "configs/tasks.json",
+    "episodes_per_task": 3,
+    "modes": ["normal", "random"],
+    "total_episodes": 60,
+    "randomization": true,
+    "fixed_cameras": false,
+    "distractors": false,
+    "physics_randomization": false
+  },
+  "variation": {
+    "task_seed_controls_official_scene_sampling": true,
+    "camera_position_jitter_m": 0.015,
+    "camera_angle_jitter_deg": 2.0,
+    "object_logic_override": false,
+    "lighting_override": false,
+    "distractors": false
+  },
+  "scale": {
+    "target_physical_transitions": 400000,
+    "target_stored_rgbd_frames": 2400000,
+    "storage_budget_gb": 300,
+    "frame_count_definition": "3 cameras x input and observation per transition"
+  },
+  "paths": {
+    "controller_test": "data/controller_test",
+    "final_data": "data/final",
+    "manifests": "data/manifests",
+    "reports": "reports"
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "stage": "canonical_controller_test",
+  "seeds": [1000, 1001, 1002],
+  "randomization": {
+    "object_pose": false,
+    "table_appearance": false,
+    "lighting": false,
+    "camera_pose": false,
+    "distractors": false,
+    "physics": false
+  },
+  "accept_early_termination": true,
+  "save_frames": false
+}
+

@@ -1,0 +1,12 @@
+[
+  {"name": "Lift", "family": "lift"},
+  {"name": "Stack", "family": "stack"},
+  {"name": "Door", "family": "door"},
+  {"name": "Wipe", "family": "wipe", "robosuite_action_dim": 6, "dataset_action_dim": 7, "unused_dataset_action": "gripper=0"},
+  {"name": "PickPlaceBread", "family": "pick_place"},
+  {"name": "PickPlaceMilk", "family": "pick_place"},
+  {"name": "NutAssemblySquare", "family": "nut_assembly"},
+  {"name": "PickPlaceSingle", "family": "pick_place"},
+  {"name": "PickPlaceCan", "family": "pick_place"},
+  {"name": "PickPlaceCereal", "family": "pick_place"}
+]

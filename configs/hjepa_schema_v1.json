@@ -1,0 +1,70 @@
+{
+  "schema_version": "wam-0.1-hjepa-v1",
+  "dataset_name": "wam-0.1",
+  "robot": "Panda arm",
+  "levels": {
+    "level_0": {
+      "unit": "physical transition",
+      "input": "three RGB-D camera views at time t",
+      "action": "one 7D Panda action at time t",
+      "output": "three RGB-D camera views at time t+1",
+      "equation": "input[t] + action[t] -> observation[t+1]"
+    },
+    "level_1": {
+      "unit": "complete action chunk",
+      "chunk_length": 8,
+      "input": "three RGB-D camera views at the chunk start",
+      "action": "8 consecutive 7D Panda actions",
+      "output": "three RGB-D camera views after the eighth action",
+      "equation": "input[start] + action[start:start+8] -> observation[start+7]"
+    }
+  },
+  "action": {
+    "dtype": "float32",
+    "shape": [7],
+    "layout": ["dx", "dy", "dz", "d_rx_axis_angle", "d_ry_axis_angle", "d_rz_axis_angle", "gripper"],
+    "nominal_range": [-1.0, 1.0],
+    "model_output": "7D float32 control vector"
+  },
+  "views": {
+    "count": 3,
+    "wam_core": {
+      "view_0": "agentview",
+      "view_1": "frontview",
+      "view_2": "birdview"
+    },
+    "robocasa": {
+      "view_0": "robot0_agentview_left",
+      "view_1": "robot0_agentview_right",
+      "view_2": "robot0_eye_in_hand"
+    },
+    "loader_rule": "group views by physical transition or chunk; never treat camera views as separate actions"
+  },
+  "images": {
+    "rgb": {"format": "PNG", "dtype": "uint8", "shape": [128, 128, 3], "orientation": "upright"},
+    "depth": {"format": "NPY", "dtype": "float32", "shape": [128, 128], "units": "render-normalized; preserve metadata and normalize in loader"}
+  },
+  "robot_state": {
+    "required_for_hjepa": false,
+    "purpose": "optional auxiliary signal; images and actions are the H-JEPA inputs",
+    "canonical_schema": "wam-0.1-panda-state-v1",
+    "canonical_dtype": "float32",
+    "canonical_shape": [30],
+    "canonical_layout": [
+      "arm_qpos[7]",
+      "arm_qvel[7]",
+      "gripper_qpos[2]",
+      "gripper_qvel[2]",
+      "eef_position[3]",
+      "eef_rotation_matrix[9]"
+    ],
+    "legacy_state_rule": "raw simulator state arrays are diagnostic only and must not be model inputs",
+    "loader_rule": "use the canonical 30D state when present; otherwise ignore robot_state arrays"
+  },
+  "index_requirements": {
+    "paths": "relative to dataset root",
+    "required_fields": ["level", "source_family", "mode", "task", "trajectory", "transition_id", "camera", "input_path", "action_path", "observation_path"],
+    "level_1_fields": ["chunk_id", "start_transition", "chunk_length", "action_block_path", "input_paths", "subgoal_paths"],
+    "split_rule": "split by trajectory or task, never by individual frames"
+  }
+}

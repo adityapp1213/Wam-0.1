@@ -1,0 +1,272 @@
+"""Replay one official RoboCasa demo into the WAM-0.1 two-level format."""
+
+from __future__ import annotations
+
+import argparse
+import copy
+import gzip
+import json
+import shutil
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+import robocasa  # noqa: F401 - registers RoboCasa tasks
+import robosuite
+
+from collect_robocasa import (
+    ACTION_LAYOUT,
+    CAMERAS,
+    link_frame,
+    read_state,
+    save_canonical_frame,
+    save_level_1,
+)
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--dataset-dir", type=Path, required=True)
+    parser.add_argument("--episode", type=int, default=0)
+    parser.add_argument("--chunk-length", type=int, default=8)
+    parser.add_argument("--image-size", type=int, default=128)
+    parser.add_argument(
+        "--out-dir",
+        type=Path,
+        default=Path("data/official_replay/robocasa"),
+    )
+    parser.add_argument("--overwrite", action="store_true")
+    return parser.parse_args()
+
+
+def load_demo(dataset_dir: Path, episode: int):
+    episode_name = f"episode_{episode:06d}"
+    extra_dir = dataset_dir / "extras" / episode_name
+    data_files = sorted((dataset_dir / "data").glob(f"*/{episode_name}.parquet"))
+    if not data_files:
+        raise FileNotFoundError(f"No action file found for {episode_name}")
+
+    with (dataset_dir / "extras" / "dataset_meta.json").open() as file:
+        dataset_meta = json.load(file)
+    with (extra_dir / "ep_meta.json").open() as file:
+        ep_meta = json.load(file)
+    with gzip.open(extra_dir / "model.xml.gz", "rt") as file:
+        model_xml = file.read()
+
+    states = np.load(extra_dir / "states.npz")["states"].astype(np.float32)
+    parquet = pd.read_parquet(data_files[0], columns=["action", "next.done"])
+    actions_lerobot = np.stack(parquet["action"].to_list()).astype(np.float32)
+    return dataset_meta, ep_meta, model_xml, states, actions_lerobot, parquet
+
+
+def to_robosuite_action(actions_lerobot: np.ndarray) -> np.ndarray:
+    """Convert LeRobot order to RoboSuite PandaOmron order."""
+    action = np.empty_like(actions_lerobot, dtype=np.float32)
+    action[:, 0:3] = actions_lerobot[:, 5:8]
+    action[:, 3:6] = actions_lerobot[:, 8:11]
+    action[:, 6:7] = actions_lerobot[:, 11:12]
+    action[:, 7:11] = actions_lerobot[:, 0:4]
+    action[:, 11:12] = actions_lerobot[:, 4:5]
+    return action
+
+
+def to_wam_action(actions_lerobot: np.ndarray) -> np.ndarray:
+    """Keep only the Panda arm and gripper control fields."""
+    return np.concatenate(
+        [actions_lerobot[:, 5:8], actions_lerobot[:, 8:11], actions_lerobot[:, 11:12]],
+        axis=1,
+    ).astype(np.float32)
+
+
+def capture_frame(env, image_size: int):
+    frames = {}
+    for camera in CAMERAS:
+        rgb, depth = env.sim.render(
+            camera_name=camera,
+            width=image_size,
+            height=image_size,
+            depth=True,
+        )
+        frames[camera] = (
+            np.flipud(np.asarray(rgb, dtype=np.uint8)).copy(),
+            np.flipud(np.asarray(depth, dtype=np.float32)).copy(),
+        )
+    return frames
+
+
+def make_env(dataset_meta: dict, image_size: int):
+    env_args = dataset_meta["env_args"]
+    env_kwargs = copy.deepcopy(env_args["env_kwargs"])
+    env_kwargs.pop("env_name", None)
+    env_kwargs.pop("layout_and_style_ids", None)
+    return robosuite.make(
+        env_name=env_args["env_name"],
+        **env_kwargs,
+        has_renderer=False,
+        has_offscreen_renderer=True,
+        use_camera_obs=False,
+        ignore_done=True,
+        control_freq=20,
+        camera_names=list(CAMERAS),
+        camera_heights=image_size,
+        camera_widths=image_size,
+    )
+
+
+def replay(args: argparse.Namespace) -> dict:
+    dataset_dir = args.dataset_dir.resolve()
+    dataset_meta, ep_meta, model_xml, recorded_states, actions_lerobot, parquet = load_demo(
+        dataset_dir, args.episode
+    )
+    if args.chunk_length <= 0:
+        raise ValueError("chunk length must be positive")
+    if len(recorded_states) != len(actions_lerobot):
+        raise RuntimeError(
+            f"official alignment mismatch: states={len(recorded_states)} "
+            f"actions={len(actions_lerobot)}"
+        )
+
+    base_motion_max = float(np.max(np.abs(actions_lerobot[:, 0:4])))
+    if base_motion_max > 1e-6:
+        raise RuntimeError(
+            f"official demo uses mobile-base motion ({base_motion_max}); "
+            "this WAM dataset is arm-only"
+        )
+
+    actions_native = to_robosuite_action(actions_lerobot)
+    actions_wam = to_wam_action(actions_lerobot)
+    task = dataset_meta["env_args"]["env_name"]
+    stage_root = (
+        args.out_dir.resolve()
+        / ".staging"
+        / f"{task}_official_{args.episode:06d}"
+    )
+    stage_frame_root = stage_root / "frames"
+    stage_frame_root.mkdir(parents=True, exist_ok=True)
+
+    try:
+        env = make_env(dataset_meta, args.image_size)
+        try:
+            if hasattr(env, "set_ep_meta"):
+                env.set_ep_meta(ep_meta)
+            env.reset()
+            env.reset_from_xml_string(model_xml)
+            env.sim.reset()
+            env.sim.set_state_from_flattened(recorded_states[0])
+            env.sim.forward()
+
+            states = []
+            replay_errors = []
+            initial_frame = capture_frame(env, args.image_size)
+            save_canonical_frame(stage_frame_root, 0, initial_frame)
+            first_rgb = initial_frame[CAMERAS[0]][0]
+            last_rgb = first_rgb
+            states.append(read_state(env))
+
+            for index, action in enumerate(actions_native):
+                env.step(action)
+                frame_id = index + 1
+                frame = capture_frame(env, args.image_size)
+                save_canonical_frame(stage_frame_root, frame_id, frame)
+                last_rgb = frame[CAMERAS[0]][0]
+                states.append(read_state(env))
+                if index + 1 < len(recorded_states):
+                    current = np.asarray(env.sim.get_state().flatten(), dtype=np.float32)
+                    replay_errors.append(
+                        float(np.linalg.norm(current - recorded_states[index + 1]))
+                    )
+            final_success = bool(env._check_success())
+        finally:
+            env.close()
+
+        official_done = bool(parquet["next.done"].iloc[-1])
+        if not official_done or not final_success:
+            raise RuntimeError(
+                f"official replay was not successful: recorded_done={official_done}, "
+                f"replayed_success={final_success}"
+            )
+
+        trajectory = (
+            args.out_dir.resolve()
+            / task
+            / "normal"
+            / f"trajectory_official_{args.episode:06d}"
+        )
+        if trajectory.exists():
+            if not args.overwrite:
+                raise FileExistsError(f"trajectory exists: {trajectory}; use --overwrite")
+            shutil.rmtree(trajectory)
+        trajectory.mkdir(parents=True)
+        (trajectory / "level_0").mkdir()
+        (trajectory / "level_1").mkdir()
+
+        frame_root = trajectory / "frames"
+        shutil.move(str(stage_frame_root), str(frame_root))
+        input_states = np.asarray(states[:-1], dtype=np.float32)
+        observation_states = np.asarray(states[1:], dtype=np.float32)
+        np.save(trajectory / "level_0" / "action.npy", actions_wam)
+        np.save(trajectory / "level_0" / "input_state.npy", input_states)
+        np.save(trajectory / "level_0" / "observation_state.npy", observation_states)
+        for transition_id in range(len(actions_wam)):
+            link_frame(frame_root, trajectory / "level_0" / "input", transition_id, transition_id)
+            link_frame(
+                frame_root,
+                trajectory / "level_0" / "observation",
+                transition_id + 1,
+                transition_id,
+            )
+        chunk_count = save_level_1(trajectory, actions_wam, states, args.chunk_length)
+
+        state_delta = float(np.linalg.norm(states[-1] - states[0]))
+        pixel_delta = float(
+            np.mean(np.abs(first_rgb.astype(np.float32) - last_rgb.astype(np.float32)))
+        )
+        metadata = {
+            "task": task,
+            "source": "official RoboCasa human demonstration",
+            "source_dataset": str(dataset_dir),
+            "official_episode": args.episode,
+            "randomness": "disabled",
+            "camera_randomization": False,
+            "distractors": False,
+            "robot": "Panda arm on PandaOmron; base action verified zero",
+            "cameras": list(CAMERAS),
+            "image_size": [args.image_size, args.image_size],
+            "action_dim": 7,
+            "action_layout": list(ACTION_LAYOUT),
+            "official_action_dim": 12,
+            "official_action_order": "LeRobot base, control_mode, arm_position, arm_rotation, gripper",
+            "transitions": len(actions_wam),
+            "frames": len(states),
+            "level_1_chunks": chunk_count,
+            "task_success_at_end": final_success,
+            "official_done_at_end": official_done,
+            "max_replay_state_error": max(replay_errors, default=0.0),
+            "state_delta_l2": state_delta,
+            "start_end_rgb_mean_abs_diff": pixel_delta,
+            "level_0_alignment": "input[t] + action[t] -> observation[t+1]",
+            "level_1_alignment": "frame[start] + consecutive actions -> frame[subgoal]",
+        }
+        with (trajectory / "metadata.json").open("w", encoding="utf-8") as file:
+            json.dump(metadata, file, indent=2)
+        shutil.rmtree(stage_root, ignore_errors=True)
+        return metadata
+    except Exception:
+        shutil.rmtree(stage_root, ignore_errors=True)
+        raise
+
+
+def main() -> None:
+    args = parse_args()
+    result = replay(args)
+    print(
+        f"official_episode={result['official_episode']} "
+        f"transitions={result['transitions']} "
+        f"level_1_chunks={result['level_1_chunks']} "
+        f"success={result['task_success_at_end']}"
+    )
+    print(f"output={args.out_dir.resolve()}")
+
+
+if __name__ == "__main__":
+    main()
